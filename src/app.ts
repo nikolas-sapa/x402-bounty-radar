@@ -3,14 +3,16 @@ import { paymentMiddleware, type Network } from "x402-hono";
 import { getBounties, type Query } from "./bounties.js";
 
 // --- Config (all via env; nothing hardcoded) ---
-// Fallback to the burn address keeps serverless cold-starts from crashing at
-// import time; a real deploy MUST set PAY_TO_ADDRESS or it cannot be paid.
-const PAY_TO = (process.env.PAY_TO_ADDRESS ?? "0x000000000000000000000000000000000000dEaD") as `0x${string}`;
-const NETWORK = (process.env.X402_NETWORK ?? "base-sepolia") as Network;
-const PRICE = process.env.X402_PRICE ?? "$0.01";
-const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? "https://x402.org/facilitator";
-
+// Read at buildApp() call time, NOT module-load time: on Workers the env is
+// bridged into process.env inside the fetch handler, which runs after import.
 export function buildApp() {
+  // Fallback to the burn address keeps cold-starts from crashing; a real deploy
+  // MUST set PAY_TO_ADDRESS or it cannot be paid.
+  const PAY_TO = (process.env.PAY_TO_ADDRESS ?? "0x000000000000000000000000000000000000dEaD") as `0x${string}`;
+  const NETWORK = (process.env.X402_NETWORK ?? "base-sepolia") as Network;
+  const PRICE = process.env.X402_PRICE ?? "$0.01";
+  const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? "https://x402.org/facilitator";
+
   const app = new Hono();
 
   app.get("/", (c) =>
@@ -71,4 +73,10 @@ export function buildApp() {
   return app;
 }
 
-export const config = { PAY_TO, NETWORK };
+// Config snapshot for logging (read at call time, same source as buildApp).
+export function readConfig() {
+  return {
+    PAY_TO: process.env.PAY_TO_ADDRESS ?? "0x000000000000000000000000000000000000dEaD",
+    NETWORK: process.env.X402_NETWORK ?? "base-sepolia",
+  };
+}
