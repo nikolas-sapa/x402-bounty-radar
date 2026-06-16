@@ -1,0 +1,15 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "x402-bounty-radar",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "vars": {
+    "PAY_TO_ADDRESS": "0x183D4d995596568BA537f9361958E21cf3499B83",
+    "X402_NETWORK": "base-sepolia",
+    "X402_PRICE": "$0.01",
+    "X402_FACILITATOR_URL": "https://x402.org/facilitator"
+  }
+  // GITHUB_TOKEN -> set as a secret in prod:  npx wrangler secret put GITHUB_TOKEN
+}
