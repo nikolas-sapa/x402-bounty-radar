@@ -1,0 +1,28 @@
+{
+  "name": "bounty-radar-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Bounty Radar — search real, scam-filtered, funded GitHub dev bounties. Pay-per-call $0.01 USDC via x402 on Base. No account, no API key.",
+  "type": "module",
+  "bin": { "bounty-radar-mcp": "dist/index.js" },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/index.js --banner:js=\"#!/usr/bin/env node\nimport{createRequire as __cr}from'module';const require=__cr(import.meta.url);\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepublishOnly": "npm run build",
+    "start": "node dist/index.js"
+  },
+  "keywords": ["mcp", "model-context-protocol", "x402", "bounties", "github", "ai-agents", "usdc", "base"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/nikolas-sapa/x402-bounty-radar" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "x402-fetch": "^1.2.0",
+    "viem": "^2.52.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0"
+  }
+}

@@ -1,0 +1,24 @@
+# Smithery config — https://smithery.ai
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required: ["privateKey"]
+    properties:
+      privateKey:
+        type: string
+        title: Base wallet private key
+        description: A Base wallet key with a little USDC to pay the $0.01/call x402 fee. Stays local.
+      bountyRadarUrl:
+        type: string
+        title: API URL override
+        description: Optional. Defaults to the hosted service.
+  commandFunction: |
+    (config) => ({
+      command: "npx",
+      args: ["-y", "bounty-radar-mcp"],
+      env: {
+        PRIVATE_KEY: config.privateKey,
+        ...(config.bountyRadarUrl ? { BOUNTY_RADAR_URL: config.bountyRadarUrl } : {})
+      }
+    })

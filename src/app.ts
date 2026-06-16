@@ -1,6 +1,34 @@
 import { Hono } from "hono";
 import { paymentMiddleware, type Network } from "x402-hono";
-import { getBounties, type Query } from "./bounties.js";
+import { getBounties, cacheStats, type Query } from "./bounties.js";
+
+// USDC contract per network — surfaced in discovery metadata so agents/tools
+// can verify the asset before paying.
+const USDC: Record<string, string> = {
+  base: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "base-sepolia": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+};
+
+// One representative result, so an agent knows the exact output shape pre-payment.
+const OUTPUT_EXAMPLE = {
+  count: 1,
+  bounties: [
+    {
+      repo: "owner/project",
+      number: 1234,
+      title: "Implement TypeScript SDK",
+      url: "https://github.com/owner/project/issues/1234",
+      createdAt: "2026-06-10T12:00:00Z",
+      ageDays: 6,
+      comments: 2,
+      labels: ["bounty", "$250"],
+      amountUsd: 250,
+      competition: "low",
+      trust: "likely_real",
+      scamReasons: [],
+    },
+  ],
+};
 
 // --- Config (all via env; nothing hardcoded) ---
 // Read at buildApp() call time, NOT module-load time: on Workers the env is
@@ -14,26 +42,51 @@ export function buildApp() {
   const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? "https://x402.org/facilitator";
 
   const app = new Hono();
+  let paidCount = 0;
 
   app.get("/", (c) =>
     c.json({
       name: "x402-bounty-radar",
+      version: "0.1.0",
       description:
-        "Paid API for real, funded developer bounties with scam-farm filtering and competition scoring.",
+        "Paid API for real, funded developer bounties with scam-farm filtering and competition scoring. Pay-per-call, no account, no API key.",
       paid_endpoint: "/bounties",
-      price: PRICE,
-      network: NETWORK,
-      pay_to: PAY_TO,
-      params: {
-        language: "filter by language, e.g. typescript",
-        minAmount: "min USD bounty value",
-        maxAgeDays: "freshness cap",
-        includeSuspect: "true to include scam-suspect listings",
-        limit: "max results (<=50)",
+      // x402 payment surface (machine-readable for agent discovery).
+      payment: {
+        protocol: "x402",
+        price: PRICE,
+        currency: "USDC",
+        network: NETWORK,
+        asset: USDC[NETWORK] ?? null,
+        payTo: PAY_TO,
+        facilitator: FACILITATOR_URL,
       },
+      inputSchema: {
+        type: "object",
+        properties: {
+          language: { type: "string", description: "filter by language, e.g. typescript" },
+          minAmount: { type: "number", description: "min USD bounty value" },
+          maxAgeDays: { type: "number", description: "max age in days (freshness cap)" },
+          includeSuspect: { type: "boolean", description: "include scam-suspect listings" },
+          limit: { type: "number", description: "max results (<=50)" },
+        },
+      },
+      output: { example: OUTPUT_EXAMPLE },
+      links: { repo: "https://github.com/nikolas-sapa/x402-bounty-radar", protocol: "https://x402.org" },
     }),
   );
   app.get("/health", (c) => c.json({ ok: true }));
+  // Approximate, this-isolate-only counters. Source of truth for true totals:
+  // Cloudflare Workers Analytics (calls) + Basescan on payTo (revenue).
+  app.get("/metrics", (c) =>
+    c.json({
+      note: "isolate-local approximation; true totals via Cloudflare Analytics + Basescan",
+      paidRequests: paidCount,
+      cache: cacheStats(),
+      payTo: PAY_TO,
+      network: NETWORK,
+    }),
+  );
 
   // Gate the paid route behind x402 payment.
   app.use(
@@ -63,6 +116,7 @@ export function buildApp() {
     };
     try {
       const bounties = await getBounties(query);
+      paidCount++;
       return c.json({ count: bounties.length, query, bounties });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "unknown error";

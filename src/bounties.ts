@@ -48,6 +48,18 @@ const FAMOUS: Record<string, string[]> = {
 
 const GH = "https://api.github.com";
 
+// In-isolate cache of raw GitHub search results, keyed by language. Cloudflare
+// Workers isolates persist briefly across requests, so a short TTL sharply cuts
+// GitHub calls under burst traffic (critical: unauthenticated search is ~10/min).
+const RAW_TTL_MS = 60_000;
+const rawCache = new Map<string, { at: number; items: GhIssue[] }>();
+let cacheHits = 0;
+let cacheMisses = 0;
+
+export function cacheStats() {
+  return { hits: cacheHits, misses: cacheMisses, keys: rawCache.size, ttlMs: RAW_TTL_MS };
+}
+
 function ghHeaders(): Record<string, string> {
   const h: Record<string, string> = {
     Accept: "application/vnd.github+json",
@@ -121,21 +133,31 @@ export async function getBounties(query: Query): Promise<Bounty[]> {
   const labels = ["💎 Bounty", "bounty", "💰 bounty"];
   const lang = query.language;
 
-  const raw: GhIssue[] = [];
-  const seen = new Set<string>();
-  for (const lbl of labels) {
-    let items: GhIssue[] = [];
-    try {
-      items = await searchLabel(lbl, lang, perPage);
-    } catch (e) {
-      if (raw.length === 0 && lbl === labels[labels.length - 1]) throw e;
-    }
-    for (const it of items) {
-      if (!seen.has(it.html_url)) {
-        seen.add(it.html_url);
-        raw.push(it);
+  const cacheKey = lang ?? "*";
+  const cached = rawCache.get(cacheKey);
+  let raw: GhIssue[];
+  if (cached && Date.now() - cached.at < RAW_TTL_MS) {
+    cacheHits++;
+    raw = cached.items;
+  } else {
+    cacheMisses++;
+    raw = [];
+    const seen = new Set<string>();
+    for (const lbl of labels) {
+      let items: GhIssue[] = [];
+      try {
+        items = await searchLabel(lbl, lang, perPage);
+      } catch (e) {
+        if (raw.length === 0 && lbl === labels[labels.length - 1]) throw e;
+      }
+      for (const it of items) {
+        if (!seen.has(it.html_url)) {
+          seen.add(it.html_url);
+          raw.push(it);
+        }
       }
     }
+    rawCache.set(cacheKey, { at: Date.now(), items: raw });
   }
 
   const now = Date.now();
