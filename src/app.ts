@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { paymentMiddleware, type Network } from "x402-hono";
 import { getBounties, cacheStats, type Query } from "./bounties.js";
+import { landingHtml } from "./landing.js";
 
 // USDC contract per network — surfaced in discovery metadata so agents/tools
 // can verify the asset before paying.
@@ -44,8 +45,13 @@ export function buildApp() {
   const app = new Hono();
   let paidCount = 0;
 
-  app.get("/", (c) =>
-    c.json({
+  app.get("/", (c) => {
+    // Content negotiation: browsers get the HTML landing; everything else
+    // (agents, curl, x402 clients) keeps the JSON discovery doc unchanged.
+    if (c.req.header("accept")?.includes("text/html")) {
+      return c.html(landingHtml({ origin: new URL(c.req.url).origin, price: PRICE, network: NETWORK }));
+    }
+    return c.json({
       name: "x402-bounty-radar",
       version: "0.1.0",
       description:
@@ -73,8 +79,8 @@ export function buildApp() {
       },
       output: { example: OUTPUT_EXAMPLE },
       links: { repo: "https://github.com/nikolas-sapa/x402-bounty-radar", protocol: "https://x402.org" },
-    }),
-  );
+    });
+  });
   app.get("/health", (c) => c.json({ ok: true }));
   // Approximate, this-isolate-only counters. Source of truth for true totals:
   // Cloudflare Workers Analytics (calls) + Basescan on payTo (revenue).
