@@ -2,9 +2,13 @@
 // Agents hitting / with any other Accept header keep getting the JSON discovery
 // doc (see app.ts) — this file is browser-facing only.
 
-export function landingHtml(opts: { origin: string; price: string; network: string }): string {
-  const { origin, price, network } = opts;
+export function landingHtml(opts: { origin: string; price: string; network: string; configured?: boolean }): string {
+  const { origin, price, network, configured = true } = opts;
   const curlCmd = `curl -i "${origin}/bounties?language=typescript&minAmount=100"`;
+  // When no wallet is configured, the paid endpoint is disabled (503). Don't sell a pay CTA that can't take money.
+  const notice = configured
+    ? ""
+    : `<p class="sub" style="color:var(--accent)">This deployment isn't accepting payments yet — the paid endpoint is disabled until a wallet is configured.</p>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -63,6 +67,7 @@ footer{margin-top:96px;padding-top:24px;border-top:1px solid var(--border);color
 <main>
   <h1>Real, funded GitHub bounties. Scam-filtered, competition-scored.</h1>
   <p class="sub"><strong>${price} per call in USDC via x402</strong> — no API key, no KYC. One HTTP request, one micropayment, ranked bounties back.</p>
+  ${notice}
 
   <div class="terminal">
     <div class="terminal-bar">

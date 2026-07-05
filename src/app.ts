@@ -35,12 +35,16 @@ const OUTPUT_EXAMPLE = {
 // Read at buildApp() call time, NOT module-load time: on Workers the env is
 // bridged into process.env inside the fetch handler, which runs after import.
 export function buildApp() {
-  // Fallback to the burn address keeps cold-starts from crashing; a real deploy
-  // MUST set PAY_TO_ADDRESS or it cannot be paid.
-  const PAY_TO = (process.env.PAY_TO_ADDRESS ?? "0x000000000000000000000000000000000000dEaD") as `0x${string}`;
+  // The burn address is the sentinel for "no wallet configured". A real deploy
+  // MUST set PAY_TO_ADDRESS; if it hasn't, we refuse to accept payment rather
+  // than silently route a caller's USDC to a black hole (see CONFIGURED gate below).
+  const BURN = "0x000000000000000000000000000000000000dEaD";
+  const PAY_TO = (process.env.PAY_TO_ADDRESS ?? BURN) as `0x${string}`;
   const NETWORK = (process.env.X402_NETWORK ?? "base-sepolia") as Network;
   const PRICE = process.env.X402_PRICE ?? "$0.01";
   const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? "https://x402.org/facilitator";
+  // Payment is only offered when a real wallet is set. Never charge into the burn address.
+  const CONFIGURED = PAY_TO.toLowerCase() !== BURN.toLowerCase();
 
   const app = new Hono();
   let paidCount = 0;
@@ -49,24 +53,30 @@ export function buildApp() {
     // Content negotiation: browsers get the HTML landing; everything else
     // (agents, curl, x402 clients) keeps the JSON discovery doc unchanged.
     if (c.req.header("accept")?.includes("text/html")) {
-      return c.html(landingHtml({ origin: new URL(c.req.url).origin, price: PRICE, network: NETWORK }));
+      return c.html(landingHtml({ origin: new URL(c.req.url).origin, price: PRICE, network: NETWORK, configured: CONFIGURED }));
     }
     return c.json({
       name: "x402-bounty-radar",
       version: "0.1.0",
       description:
         "Paid API for real, funded developer bounties with scam-farm filtering and competition scoring. Pay-per-call, no account, no API key.",
-      paid_endpoint: "/bounties",
-      // x402 payment surface (machine-readable for agent discovery).
-      payment: {
-        protocol: "x402",
-        price: PRICE,
-        currency: "USDC",
-        network: NETWORK,
-        asset: USDC[NETWORK] ?? null,
-        payTo: PAY_TO,
-        facilitator: FACILITATOR_URL,
-      },
+      paid_endpoint: CONFIGURED ? "/bounties" : null,
+      // x402 payment surface (machine-readable for agent discovery). When the
+      // deployment has no wallet set, advertise unavailable — never a payable void.
+      payment: CONFIGURED
+        ? {
+            protocol: "x402",
+            price: PRICE,
+            currency: "USDC",
+            network: NETWORK,
+            asset: USDC[NETWORK] ?? null,
+            payTo: PAY_TO,
+            facilitator: FACILITATOR_URL,
+          }
+        : {
+            status: "unavailable",
+            reason: "This deployment has no PAY_TO_ADDRESS configured; payments are disabled.",
+          },
       inputSchema: {
         type: "object",
         properties: {
@@ -94,22 +104,36 @@ export function buildApp() {
     }),
   );
 
-  // Gate the paid route behind x402 payment.
-  app.use(
-    paymentMiddleware(
-      PAY_TO,
-      {
-        "/bounties": {
-          price: PRICE,
-          network: NETWORK,
-          config: {
-            description: "Curated, scam-filtered, competition-scored developer bounties.",
+  // Gate the paid route behind x402 payment — but ONLY when a real wallet is set.
+  // If unconfigured, refuse /bounties with 503 so no caller can ever pay into the
+  // burn address. Fail loud, never take money to a void.
+  if (CONFIGURED) {
+    app.use(
+      paymentMiddleware(
+        PAY_TO,
+        {
+          "/bounties": {
+            price: PRICE,
+            network: NETWORK,
+            config: {
+              description: "Curated, scam-filtered, competition-scored developer bounties.",
+            },
           },
         },
-      },
-      { url: FACILITATOR_URL as `${string}://${string}` },
-    ),
-  );
+        { url: FACILITATOR_URL as `${string}://${string}` },
+      ),
+    );
+  } else {
+    app.all("/bounties", (c) =>
+      c.json(
+        {
+          error: "payment_not_configured",
+          detail: "PAY_TO_ADDRESS is not set on this deployment; the paid endpoint is disabled to avoid routing USDC to the burn address.",
+        },
+        503,
+      ),
+    );
+  }
 
   app.get("/bounties", async (c) => {
     const q = c.req.query();
