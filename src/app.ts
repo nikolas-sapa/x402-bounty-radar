@@ -39,12 +39,18 @@ export function buildApp() {
   // MUST set PAY_TO_ADDRESS; if it hasn't, we refuse to accept payment rather
   // than silently route a caller's USDC to a black hole (see CONFIGURED gate below).
   const BURN = "0x000000000000000000000000000000000000dEaD";
-  const PAY_TO = (process.env.PAY_TO_ADDRESS ?? BURN) as `0x${string}`;
+  const ZERO = "0x0000000000000000000000000000000000000000";
+  const rawPayTo = (process.env.PAY_TO_ADDRESS ?? "").trim();
+  // "Configured" means a real, well-formed, non-sentinel address. Anything else
+  // (unset, empty, whitespace, malformed, burn, or zero) => payment disabled, 503.
+  // The guard detects MISconfiguration, not just one placeholder string.
+  const isValidAddr = /^0x[0-9a-fA-F]{40}$/.test(rawPayTo);
+  const isSentinel = rawPayTo.toLowerCase() === BURN.toLowerCase() || rawPayTo.toLowerCase() === ZERO.toLowerCase();
+  const CONFIGURED = isValidAddr && !isSentinel;
+  const PAY_TO = (isValidAddr ? rawPayTo : BURN) as `0x${string}`;
   const NETWORK = (process.env.X402_NETWORK ?? "base-sepolia") as Network;
   const PRICE = process.env.X402_PRICE ?? "$0.01";
   const FACILITATOR_URL = process.env.X402_FACILITATOR_URL ?? "https://x402.org/facilitator";
-  // Payment is only offered when a real wallet is set. Never charge into the burn address.
-  const CONFIGURED = PAY_TO.toLowerCase() !== BURN.toLowerCase();
 
   const app = new Hono();
   let paidCount = 0;
@@ -99,7 +105,7 @@ export function buildApp() {
       note: "isolate-local approximation; true totals via Cloudflare Analytics + Basescan",
       paidRequests: paidCount,
       cache: cacheStats(),
-      payTo: PAY_TO,
+      payTo: CONFIGURED ? PAY_TO : null,
       network: NETWORK,
     }),
   );
