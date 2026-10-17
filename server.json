@@ -1,0 +1,31 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.nikolas-sapa/bounty-radar",
+  "description": "Search real, funded GitHub developer bounties — scam-farm clones filtered, competition scored. Pay-per-call $0.01 USDC via x402 on Base. No account, no API key.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/nikolas-sapa/x402-bounty-radar",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "bounty-radar-mcp",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "PRIVATE_KEY",
+          "description": "Base wallet private key (with a little USDC) used to pay the $0.01/call x402 fee. Stays local.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "BOUNTY_RADAR_URL",
+          "description": "Override the API endpoint (defaults to the hosted service).",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
