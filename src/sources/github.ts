@@ -4,7 +4,7 @@
 // only worth it for the final result slice), and repo bounty-payout history.
 
 import type { BountyDraft, FetchContext, SourceAdapter } from "../types.js";
-import watchlists from "../../data/watchlists.json";
+import watchlists from "../../data/watchlists.json" with { type: "json" };
 
 const GH = "https://api.github.com";
 
