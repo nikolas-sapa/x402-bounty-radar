@@ -52,7 +52,10 @@ interface CantinaItem {
   assetGroups: Array<{ rewards?: Array<{ maxReward?: string | null }> | null }> | null;
 }
 
+// Money fields are strings | null. Number(null)/Number("") are both 0 —
+// guard first or an undisclosed pot masquerades as $0 claimed.
 function num(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }

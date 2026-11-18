@@ -48,13 +48,13 @@ function ghHeaders(): Record<string, string> {
   return h;
 }
 
-// Copied from github.ts — "$5000", "[Bounty $50]", "$50-200", "$5k".
+// Copied from github.ts — "$5000", "[Bounty $50]", "$50-200", "$5k", "$1.5k".
+// The k-multiplier binds to the matched amount only.
 function parseAmount(title: string, labels: string[]): number | null {
   const hay = [title, ...labels].join(" ");
-  const m = hay.match(/\$\s?(\d[\d,]*)\s*(?:k\b)?/i);
+  const m = hay.match(/\$\s?(\d[\d,]*(?:\.\d+)?)\s*(k)?\b/i);
   if (!m) return null;
-  let n = Number(m[1].replace(/,/g, ""));
-  if (/\$\s?\d[\d,]*\s*k/i.test(hay)) n *= 1000;
+  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 1000 : 1);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -87,7 +87,7 @@ interface GhIssue {
 
 async function searchIssues(q: string, perPage: number): Promise<GhIssue[]> {
   const url = `${GH}/search/issues?q=${encodeURIComponent(q)}&sort=created&order=desc&per_page=${perPage}`;
-  const res = await fetch(url, { headers: ghHeaders() });
+  const res = await fetch(url, { headers: ghHeaders(), signal: AbortSignal.timeout(15_000) });
   if (!res.ok) {
     if (res.status === 403) throw new Error("GitHub rate limit hit — set GITHUB_TOKEN");
     throw new Error(`GitHub search failed: ${res.status}`);
@@ -119,7 +119,7 @@ interface GhRepo {
 
 async function searchRepos(q: string, perPage: number): Promise<GhRepo[]> {
   const url = `${GH}/search/repositories?q=${encodeURIComponent(q)}&sort=updated&order=desc&per_page=${perPage}`;
-  const res = await fetch(url, { headers: ghHeaders() });
+  const res = await fetch(url, { headers: ghHeaders(), signal: AbortSignal.timeout(15_000) });
   if (!res.ok) {
     if (res.status === 403) throw new Error("GitHub rate limit hit — set GITHUB_TOKEN");
     throw new Error(`GitHub repo search failed: ${res.status}`);
@@ -184,41 +184,53 @@ export const githubExtras: SourceAdapter = {
     const byUrl = new Map<string, BountyDraft>();
 
     // Ecosystem queries are watchlist-scoped: extras contribute only drafts
-    // inside watchlist repos (plus their per-query repo: filters below).
+    // inside watchlist repos. An ecosystem name with no watchlist is rejected
+    // upstream, but stay defensive — never silently downgrade to global scope.
     const wl = ctx.ecosystem ? watchlistRepos(ctx.ecosystem) : undefined;
+    if (ctx.ecosystem && !wl) return [];
     const inWatchlist = (repo: string) => !wl || wl.some((r) => r.toLowerCase() === repo.toLowerCase());
-    const repoScope = wl ? wl.map((r) => `repo:${r}`).join(" ") : "";
+    const langFilter = ctx.language ? ` language:${ctx.language}` : "";
+    // repo: terms OR together (~5 safe per query) — chunk like the github
+    // adapter so one renamed watchlist repo can't 422 the whole search.
+    const scopes: string[] = [];
+    if (wl) for (let i = 0; i < wl.length; i += 5) scopes.push(wl.slice(i, i + 5).map((r) => `repo:${r}`).join(" "));
+    if (scopes.length === 0) scopes.push("");
 
-    for (const { q, note, escrowed } of ISSUE_QUERIES) {
-      let items: GhIssue[] = [];
-      try {
-        items = await searchIssues(repoScope ? `${q} ${repoScope}` : q, perPage);
-      } catch (e) {
-        // One dead query costs its results only — return what succeeded.
-        console.error(`[github-extras] query failed (${note}): ${e instanceof Error ? e.message : String(e)}`);
-        continue;
-      }
-      for (const it of items) {
-        const repo = it.repository_url.split("/").slice(-2).join("/");
-        if (!inWatchlist(repo)) continue;
-        const existing = byUrl.get(it.html_url);
-        if (existing) {
-          // Same issue matched another query — union provenance, upgrade escrow.
-          const notes = new Set([...(existing.signals?.sourceNotes ?? []), note]);
-          existing.signals = { ...existing.signals, sourceNotes: [...notes] };
-          if (escrowed && !existing.escrowed) {
-            existing.escrowed = true;
-            existing.fundingHint = "escrowed";
-          }
+    for (const scope of scopes) {
+      for (const { q, note, escrowed } of ISSUE_QUERIES) {
+        let items: GhIssue[] = [];
+        try {
+          items = await searchIssues(scope ? `${q} ${scope}${langFilter}` : `${q}${langFilter}`, perPage);
+        } catch (e) {
+          // One dead query costs its results only — return what succeeded.
+          console.error(`[github-extras] query failed (${note}): ${e instanceof Error ? e.message : String(e)}`);
           continue;
         }
-        byUrl.set(it.html_url, toDraft(it, note, escrowed));
+        for (const it of items) {
+          const repo = it.repository_url.split("/").slice(-2).join("/");
+          if (!inWatchlist(repo)) continue;
+          const existing = byUrl.get(it.html_url);
+          if (existing) {
+            // Same issue matched another query — union provenance, upgrade escrow.
+            const notes = new Set([...(existing.signals?.sourceNotes ?? []), note]);
+            existing.signals = { ...existing.signals, sourceNotes: [...notes] };
+            if (escrowed && !existing.escrowed) {
+              existing.escrowed = true;
+              existing.fundingHint = "escrowed";
+            }
+            continue;
+          }
+          byUrl.set(it.html_url, toDraft(it, note, escrowed));
+        }
       }
     }
 
     for (const { topic, note } of TOPIC_QUERIES) {
       try {
-        for (const r of await searchRepos(`topic:${topic} sort:updated-desc`, perPage)) {
+        // `sort:` is not a valid in-query qualifier for repository search —
+        // it was being AND'd as literal text and killing the query. Sorting
+        // is already requested via the &sort= URL parameter in searchRepos.
+        for (const r of await searchRepos(`topic:${topic}${langFilter}`, perPage)) {
           if (!byUrl.has(r.html_url) && inWatchlist(r.full_name)) byUrl.set(r.html_url, repoToDraft(r, note));
         }
       } catch (e) {

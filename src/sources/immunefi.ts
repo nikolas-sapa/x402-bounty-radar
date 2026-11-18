@@ -39,7 +39,12 @@ function collect(node: unknown, out: ImmBounty[]): void {
       out.push(...(node as ImmBounty[]));
       return;
     }
-    for (const x of node) collect(x, out);
+    // Mixed array: keep elements that are themselves program objects rather
+    // than letting one stray element lose the whole array.
+    for (const x of node) {
+      if (x !== null && typeof x === "object" && !Array.isArray(x) && "maxBounty" in x) out.push(x as ImmBounty);
+      else collect(x, out);
+    }
     return;
   }
   if (node !== null && typeof node === "object") {

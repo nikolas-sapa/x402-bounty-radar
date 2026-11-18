@@ -54,7 +54,8 @@ interface SherlockPage {
 
 function isoFromEpoch(sec: number | null): string | null {
   if (!sec || !Number.isFinite(sec)) return null;
-  return new Date(sec * 1000).toISOString();
+  const d = new Date(sec * 1000);
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null;
 }
 
 function toDraft(c: SherlockContest): BountyDraft {
@@ -105,7 +106,7 @@ export const sherlock: SourceAdapter = {
               seen.add(c.id);
               drafts.push(toDraft(c));
             }
-            page = data.next_page;
+            page = data.next_page ?? null; // undefined would loop into "?page=undefined"
             fetched++;
           }
         } catch (e) {

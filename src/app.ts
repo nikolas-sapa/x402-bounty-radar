@@ -160,16 +160,23 @@ export function buildApp() {
 
   app.get("/bounties", async (c) => {
     const q = c.req.query();
+    // Non-numeric input ("abc", "1,000") becomes undefined, never NaN —
+    // a NaN filter silently zeroes every result on a paid route.
+    const num = (v?: string) => {
+      if (!v) return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
     const query: Query = {
       language: q.language,
-      minAmount: q.minAmount ? Number(q.minAmount) : undefined,
-      minReward: q.minReward ? Number(q.minReward) : undefined,
-      maxAgeDays: q.maxAgeDays ? Number(q.maxAgeDays) : undefined,
+      minAmount: num(q.minAmount),
+      minReward: num(q.minReward),
+      maxAgeDays: num(q.maxAgeDays),
       includeSuspect: q.includeSuspect === "true",
-      limit: q.limit ? Number(q.limit) : undefined,
+      limit: num(q.limit),
       source: q.source,
       ecosystem: q.ecosystem,
-      maxCompetition: q.maxCompetition ? Number(q.maxCompetition) : undefined,
+      maxCompetition: num(q.maxCompetition),
     };
     try {
       const bounties = await getBounties(query);

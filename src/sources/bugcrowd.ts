@@ -50,8 +50,9 @@ function toDraft(e: Engagement): BountyDraft {
     createdAt: null, // feed doesn't publish one
     comments: 0,
     labels,
-    amountUsd: parseReward(e.rewardSummary?.minReward),
+    amountUsd: parseReward(e.rewardSummary?.maxReward) ?? parseReward(e.rewardSummary?.minReward), // headline = max, consistent with other adapters
     maxReward: parseReward(e.rewardSummary?.maxReward),
+    meta: { minReward: parseReward(e.rewardSummary?.minReward) },
     source: "bugcrowd",
     escrowed: true, // Bugcrowd holds program funds — platform-managed payouts
     deadline: e.endsAt ?? null,
@@ -74,6 +75,10 @@ export const bugcrowd: SourceAdapter = {
     return (data.engagements ?? [])
       .filter(
         (e) =>
+          // One malformed engagement must not zero the whole feed (a TypeError
+          // here would propagate out of .map and mark the source down).
+          typeof e?.name === "string" &&
+          typeof e?.briefUrl === "string" &&
           e.isPrivate === false &&
           e.isBanned !== true &&
           e.isDemo !== true &&

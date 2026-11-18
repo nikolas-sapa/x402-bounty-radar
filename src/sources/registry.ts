@@ -72,6 +72,18 @@ function record(adapter: SourceAdapter, ok: boolean, count: number, err: string 
   });
 }
 
+// Drafts are per-request objects: downstream merge/enrichment mutates them,
+// so the cache stores clones and hands out clones — never shared references.
+function cloneDraft(d: BountyDraft): BountyDraft {
+  return {
+    ...d,
+    labels: [...d.labels],
+    scamReasons: d.scamReasons ? [...d.scamReasons] : d.scamReasons,
+    signals: d.signals ? { ...d.signals, sourceNotes: [...(d.signals.sourceNotes ?? [])] } : d.signals,
+    meta: d.meta ? { ...d.meta } : d.meta,
+  };
+}
+
 // Fetch every adapter, honoring the shared TTL cache. One adapter throwing or
 // timing out costs us its drafts only — the merged response is still served
 // and /sources shows it as down.
@@ -82,17 +94,18 @@ export async function fetchAllSources(
 ): Promise<BountyDraft[]> {
   const results = await Promise.all(
     adapters.map(async (adapter) => {
-      const key = `${adapter.name}:${ctx.ecosystem ?? "*"}`;
+      // language/ecosystem both shape adapter output — both must key the cache.
+      const key = `${adapter.name}:${ctx.ecosystem ?? "*"}:${(ctx.language ?? "*").toLowerCase()}`;
       const hit = cache.get(key);
       if (!bustCache && hit && Date.now() - hit.at < TTL_MS) {
         cacheHits++;
-        return hit.items;
+        return hit.items.map(cloneDraft);
       }
       cacheMisses++;
       try {
         const items = await adapter.fetch(ctx);
         record(adapter, true, items.length, null);
-        cache.set(key, { at: Date.now(), items });
+        cache.set(key, { at: Date.now(), items: items.map(cloneDraft) });
         return items;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -108,7 +121,14 @@ export async function fetchAllSources(
 
 // --- Dedupe + cross-listing -----------------------------------------------
 
-const STOP = new Set(["the", "a", "an", "of", "for", "and", "in", "on", "to", "bug", "bounty", "program", "fix", "issue"]);
+// Generic tokens carry no identity — "defi"/"sdk"/"protocol" match hundreds of
+// unrelated programs, so they don't count as shared-name evidence.
+const STOP = new Set([
+  "the", "a", "an", "of", "for", "and", "in", "on", "to", "bug", "bounty", "program", "fix", "issue",
+  "sdk", "core", "app", "api", "protocol", "protocols", "defi", "dao", "finance", "labs", "lab",
+  "chain", "contract", "contracts", "swap", "token", "tokens", "network", "foundation", "web",
+  "v1", "v2", "v3", "v4", "v5", "xyz", "io", "com", "org", "dev", "hq", "inc", "pay", "money",
+]);
 
 function tokens(s: string): Set<string> {
   return new Set(
@@ -129,38 +149,37 @@ function repoParts(d: BountyDraft): { owner: string; name: string } {
 }
 
 // Repo identity across sources: GitHub "owner/name" vs a program name.
-// Same project when: identical repo, matching repo-name tokens, or a
-// program-level name matching the other side's org owner ("Uniswap" the
-// Immunefi program covers github.com/Uniswap/* repos).
-function sameProject(a: BountyDraft, b: BountyDraft): boolean {
+// Same project when: identical repo, a program-level name matching the other
+// side's org owner ("Uniswap" the Immunefi program covers github.com/Uniswap/*
+// repos), or >=2 shared non-generic name tokens — one word isn't evidence.
+function sameProject(
+  a: BountyDraft,
+  b: BountyDraft,
+  aTok: Set<string>,
+  bTok: Set<string>,
+): boolean {
   if (norm(a.repo) === norm(b.repo)) return true;
   const A = repoParts(a);
   const B = repoParts(b);
-  const ta = tokens(A.name);
-  const tb = tokens(B.name);
-  for (const t of ta) if (tb.has(t)) return true; // shared repo/project name token
   if (A.owner && norm(A.owner) === norm(B.name)) return true; // org program covers repo
   if (B.owner && norm(B.owner) === norm(A.name)) return true;
-  return false;
+  let shared = 0;
+  for (const t of aTok) if (bTok.has(t)) shared++;
+  return shared >= 2;
 }
 
-function titleSimilarity(a: string, b: string): number {
-  const ta = tokens(a);
-  const tb = tokens(b);
+function titleSimilarity(ta: Set<string>, tb: Set<string>): number {
   if (!ta.size || !tb.size) return 0;
   let inter = 0;
   for (const t of ta) if (tb.has(t)) inter++;
   return inter / Math.max(ta.size, tb.size);
 }
 
-// Same underlying bounty = same URL, or same project + strongly similar title.
-function sameBounty(a: BountyDraft, b: BountyDraft): boolean {
-  if (a.url.toLowerCase() === b.url.toLowerCase()) return true;
-  if (!sameProject(a, b)) return false;
-  return titleSimilarity(a.title, b.title) >= 0.5;
+function normUrl(url: string): string {
+  return url.toLowerCase().replace(/\/+$/, "");
 }
 
-// Prefer the richer record when merging: more fields filled wins.
+// Prefer the richer record for display fields when merging.
 function richer(a: BountyDraft, b: BountyDraft): BountyDraft {
   const score = (d: BountyDraft) =>
     (d.amountUsd !== null ? 4 : 0) +
@@ -171,37 +190,81 @@ function richer(a: BountyDraft, b: BountyDraft): BountyDraft {
   return score(a) >= score(b) ? a : b;
 }
 
+// The winner's identity fields (title/url/repo) stay, but signal-bearing
+// fields union — a merge must never drop escrow status, activity counts, or
+// scam evidence that only the losing record carried.
+function mergeFields(keep: BountyDraft, lose: BountyDraft): void {
+  keep.escrowed = keep.escrowed || lose.escrowed;
+  keep.comments = Math.max(keep.comments, lose.comments);
+  keep.labels = [...new Set([...keep.labels, ...lose.labels])];
+  keep.scamReasons = [...new Set([...(keep.scamReasons ?? []), ...(lose.scamReasons ?? [])])];
+  if ((lose.trust ?? "likely_real") === "suspect_scam") keep.trust = "suspect_scam";
+  if (keep.fundingHint !== "escrowed" && lose.fundingHint) keep.fundingHint = lose.fundingHint;
+  keep.deadline = keep.deadline ?? lose.deadline;
+  keep.amountUsd = keep.amountUsd ?? lose.amountUsd;
+  keep.maxReward = keep.maxReward ?? lose.maxReward;
+  keep.severity = keep.severity ?? lose.severity;
+  keep.createdAt = keep.createdAt ?? lose.createdAt;
+  keep.number = keep.number ?? lose.number;
+  keep.signals = {
+    ...keep.signals,
+    linkedPrs: Math.max(keep.signals?.linkedPrs ?? 0, lose.signals?.linkedPrs ?? 0),
+    reactions: Math.max(keep.signals?.reactions ?? 0, lose.signals?.reactions ?? 0),
+    sourceNotes: [...new Set([...(keep.signals?.sourceNotes ?? []), ...(lose.signals?.sourceNotes ?? [])])],
+  };
+}
+
 // Merges true duplicates, then flags crossListed on every draft whose project
-// shows up under >1 distinct source name.
+// shows up under >1 distinct source name. Malformed drafts (no usable url)
+// degrade like adapter failures — dropped, never crash the response.
 export function dedupeAndFlag(drafts: BountyDraft[]): BountyDraft[] {
+  const valid = drafts.filter((d) => typeof d.url === "string" && d.url.length > 0);
+  // Precompute token sets once — comparisons run O(n^2) over merged drafts.
+  const toks = new Map<BountyDraft, { name: Set<string>; title: Set<string> }>();
+  for (const d of valid) toks.set(d, { name: tokens(repoParts(d).name), title: tokens(d.title) });
+
+  const sameBounty = (a: BountyDraft, b: BountyDraft): boolean => {
+    if (normUrl(a.url) === normUrl(b.url)) return true;
+    const ta = toks.get(a)!;
+    const tb = toks.get(b)!;
+    if (!sameProject(a, b, ta.name, tb.name)) return false;
+    return titleSimilarity(ta.title, tb.title) >= 0.5;
+  };
+
   const merged: BountyDraft[] = [];
   const mergedFrom = new Map<BountyDraft, Set<string>>();
-  for (const d of drafts) {
-    const idx = merged.findIndex((m) => sameBounty(m, d));
+  const urlIdx = new Map<string, number>();
+  for (const d of valid) {
+    const u = normUrl(d.url);
+    let idx = urlIdx.get(u) ?? -1;
+    if (idx === -1) idx = merged.findIndex((m) => sameBounty(m, d));
     if (idx === -1) {
       merged.push(d);
       mergedFrom.set(d, new Set([d.source]));
+      urlIdx.set(u, merged.length - 1);
     } else {
-      const keep = richer(merged[idx], d);
-      const others = merged[idx] === keep ? d : merged[idx];
-      // union the provenance; fold the loser's notes into the keeper
-      const srcs = mergedFrom.get(merged[idx]) ?? new Set([merged[idx].source]);
+      const prev = merged[idx];
+      const keep = richer(prev, d);
+      const lose = prev === keep ? d : prev;
+      const srcs = new Set(mergedFrom.get(prev) ?? [prev.source]);
       for (const s of mergedFrom.get(d) ?? [d.source]) srcs.add(s);
-      const combinedNotes = [...(keep.signals?.sourceNotes ?? []), ...(others.signals?.sourceNotes ?? [])];
-      keep.signals = { ...keep.signals, sourceNotes: [...new Set(combinedNotes)] };
+      mergedFrom.delete(prev);
+      mergeFields(keep, lose);
       merged[idx] = keep;
-      mergedFrom.delete(merged[idx]);
       mergedFrom.set(keep, srcs);
     }
   }
-  // Cross-listed: same project (repo token overlap) reachable via >1 source.
+  // Cross-listed: same project reachable via >1 source.
   for (let i = 0; i < merged.length; i++) {
     const srcs = mergedFrom.get(merged[i]) ?? new Set([merged[i].source]);
     if (srcs.size > 1) continue; // already merged from multiple
     for (let j = 0; j < merged.length; j++) {
       if (i === j) continue;
       const otherSrcs = mergedFrom.get(merged[j]) ?? new Set([merged[j].source]);
-      if ([...otherSrcs].some((s) => !srcs.has(s)) && sameProject(merged[i], merged[j])) {
+      if (
+        [...otherSrcs].some((s) => !srcs.has(s)) &&
+        sameProject(merged[i], merged[j], toks.get(merged[i])!.name, toks.get(merged[j])!.name)
+      ) {
         for (const s of otherSrcs) srcs.add(s);
       }
     }

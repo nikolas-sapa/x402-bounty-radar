@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BountyDraft, SourceAdapter, FetchContext } from "../src/types.js";
-import { getBounties, sourceHealth } from "../src/bounties.js";
+import { getBounties, sourceHealth, ADAPTERS } from "../src/bounties.js";
 import { bountyFromDraft, scoreCompetition, classifyFunding } from "../src/scoring.js";
 import { dedupeAndFlag } from "../src/sources/registry.js";
 import { buildApp } from "../src/app.js";
@@ -117,5 +117,84 @@ test("T6: /sources is free and lists adapters", async () => {
   assert.equal(res.status, 200);
   const body = (await res.json()) as { sources: Array<{ name: string; mode: string }>; ecosystems: string[] };
   assert.ok(Array.isArray(body.sources));
+  assert.ok(body.sources.length >= ADAPTERS.length, `expected >= ${ADAPTERS.length} sources, got ${body.sources.length}`);
   assert.ok(Array.isArray(body.ecosystems));
+});
+
+// Regression: negative limit used to bypass the 50-cap via slice(0,-1).
+test("T7: negative limit clamps to zero, not everything", async () => {
+  const a = stubAdapter(
+    "lim-stub",
+    Array.from({ length: 60 }, (_, i) => draft({ repo: `x/y${i}`, url: `https://a/${i}` })),
+  );
+  const out = await getBounties({ limit: -1 }, [a]);
+  assert.equal(out.length, 0);
+});
+
+// Regression: unknown ecosystem used to leak the unfiltered extras feed AND
+// mark github down. Now: zero results, adapter never fetched.
+test("T8: unknown ecosystem returns empty without fetching", async () => {
+  let calls = 0;
+  const a = stubAdapter("eco-stub", [draft({ repo: "x/y", amountUsd: 50 })]);
+  a.fetch = async () => {
+    calls++;
+    return [draft({ repo: "x/y", amountUsd: 50 })];
+  };
+  const out = await getBounties({ ecosystem: "no-such-eco", limit: 5 }, [a]);
+  assert.equal(out.length, 0);
+  assert.equal(calls, 0);
+  const h = sourceHealth().find((s) => s.name === "eco-stub");
+  assert.notEqual(h?.status, "down");
+});
+
+// Regression: merging kept only the winner's fields — escrow, comment counts
+// and trust from the loser were dropped.
+test("T9: merge unions signal fields across the losing record", () => {
+  const gh = draft({
+    repo: "acme/vault",
+    source: "github",
+    comments: 40,
+    trust: "suspect_scam",
+    scamReasons: ["bait"],
+    url: "https://github.com/acme/vault/issues/9",
+    title: "Fix overflow in vault payout",
+  });
+  const ext = draft({
+    repo: "acme",
+    source: "immunefi",
+    escrowed: true,
+    fundingHint: "escrowed",
+    url: "https://immunefi.com/bug-bounty/acme/",
+    title: "Fix overflow in vault payout",
+  });
+  const out = dedupeAndFlag([gh, ext]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].escrowed, true);
+  assert.equal(out[0].comments, 40);
+  assert.equal(out[0].trust, "suspect_scam");
+  assert.ok(out[0].scamReasons?.includes("bait"));
+});
+
+// Regression: one shared repo-name token ("defi", "sdk") used to cross-list
+// unrelated projects. Now requires 2 non-generic tokens or an owner match.
+test("T10: a single generic shared token does not cross-list", () => {
+  const a = draft({ repo: "acme/defi", source: "a", url: "https://a/1", title: "Bounty one" });
+  const b = draft({ repo: "foo/defi", source: "b", url: "https://b/1", title: "Bounty two" });
+  const out = dedupeAndFlag([a, b]);
+  assert.equal(out.length, 2);
+  assert.ok(out.every((d) => d.crossListed === false));
+});
+
+// Regression: cache key used to omit language — "?language=rust" then
+// "?language=go" within the TTL returned the rust-filtered set.
+test("T11: cache key includes language", async () => {
+  let calls = 0;
+  const a = stubAdapter("cache-lang-stub", [draft({ repo: "x/y" })]);
+  a.fetch = async () => {
+    calls++;
+    return [draft({ repo: "x/y" })];
+  };
+  await getBounties({ language: "rust", limit: 1 }, [a]);
+  await getBounties({ language: "go", limit: 1 }, [a]);
+  assert.equal(calls, 2);
 });
