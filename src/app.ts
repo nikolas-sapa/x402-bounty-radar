@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { paymentMiddleware, type Network } from "x402-hono";
-import { getBounties, cacheStats, type Query } from "./bounties.js";
+import { getBounties, cacheStats, sourceHealth, ecosystemNames, type Query } from "./bounties.js";
 import { landingHtml } from "./landing.js";
 
 // USDC contract per network — surfaced in discovery metadata so agents/tools
@@ -24,9 +24,19 @@ const OUTPUT_EXAMPLE = {
       comments: 2,
       labels: ["bounty", "$250"],
       amountUsd: 250,
+      maxReward: null,
       competition: "low",
+      competitionScore: 14,
+      signals: { comments: 2, linkedPrs: 0, reactions: 1, ageDays: 6, crossListed: false, sourceNotes: [] },
       trust: "likely_real",
       scamReasons: [],
+      source: "github",
+      escrowed: false,
+      funding: "claimed",
+      deadline: null,
+      severity: null,
+      crossListed: false,
+      language: "typescript",
     },
   ],
 };
@@ -87,17 +97,24 @@ export function buildApp() {
         type: "object",
         properties: {
           language: { type: "string", description: "filter by language, e.g. typescript" },
-          minAmount: { type: "number", description: "min USD bounty value" },
+          minReward: { type: "number", description: "min USD bounty value (minAmount is a back-compat alias)" },
           maxAgeDays: { type: "number", description: "max age in days (freshness cap)" },
           includeSuspect: { type: "boolean", description: "include scam-suspect listings" },
+          source: { type: "string", description: "comma-separated source filter, e.g. github,immunefi" },
+          ecosystem: { type: "string", description: `watchlist filter, e.g. ${ecosystemNames().join(", ")}` },
+          maxCompetition: { type: "number", description: "max competitionScore (0-100)" },
           limit: { type: "number", description: "max results (<=50)" },
         },
       },
+      sources: sourceHealth().map((s) => s.name),
+      free_endpoints: ["/", "/health", "/metrics", "/sources"],
       output: { example: OUTPUT_EXAMPLE },
       links: { repo: "https://github.com/nikolas-sapa/x402-bounty-radar", protocol: "https://x402.org" },
     });
   });
   app.get("/health", (c) => c.json({ ok: true }));
+  // FREE: per-source liveness — a dead adapter is visible here, never silently empty.
+  app.get("/sources", (c) => c.json({ sources: sourceHealth(), ecosystems: ecosystemNames() }));
   // Approximate, this-isolate-only counters. Source of truth for true totals:
   // Cloudflare Workers Analytics (calls) + Basescan on payTo (revenue).
   app.get("/metrics", (c) =>
@@ -146,9 +163,13 @@ export function buildApp() {
     const query: Query = {
       language: q.language,
       minAmount: q.minAmount ? Number(q.minAmount) : undefined,
+      minReward: q.minReward ? Number(q.minReward) : undefined,
       maxAgeDays: q.maxAgeDays ? Number(q.maxAgeDays) : undefined,
       includeSuspect: q.includeSuspect === "true",
       limit: q.limit ? Number(q.limit) : undefined,
+      source: q.source,
+      ecosystem: q.ecosystem,
+      maxCompetition: q.maxCompetition ? Number(q.maxCompetition) : undefined,
     };
     try {
       const bounties = await getBounties(query);

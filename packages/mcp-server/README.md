@@ -1,6 +1,6 @@
 # bounty-radar-mcp
 
-MCP server that lets any agent search **real, funded developer bounties** from GitHub — scam-farm clones filtered out, competition scored. Pay-per-call **$0.01 USDC** via [x402](https://x402.org) on Base. No account, no API key.
+MCP server that lets any agent search **real, funded developer bounties** across GitHub, Immunefi, audit contests (Code4rena / Sherlock / Cantina), Bugcrowd and more — scam-farm clones filtered out, funding classified, competition scored. Pay-per-call **$0.01 USDC** via [x402](https://x402.org) on Base. No account, no API key.
 
 ## Install
 
@@ -34,12 +34,19 @@ Or add to your MCP client config (Claude Desktop, Cursor, etc.):
 | Param | Type | Notes |
 |---|---|---|
 | `language` | string | e.g. `typescript` |
-| `minAmount` | number | min USD bounty value |
+| `minReward` | number | min USD bounty value (`minAmount` is an alias) |
 | `maxAgeDays` | number | freshness cap |
 | `includeSuspect` | boolean | include scam-suspect listings |
+| `source` | string | comma-separated sources, e.g. `github,immunefi` |
+| `ecosystem` | string | watchlist filter, e.g. `x402` |
+| `maxCompetition` | number | keep only `competitionScore` ≤ N (0–100) |
 | `limit` | number | max results (≤50) |
 
-Returns JSON: each bounty has `repo`, `number`, `title`, `url`, `ageDays`, `comments`, `amountUsd`, `competition` (low/medium/high), `trust` (likely_real/suspect_scam), `scamReasons`.
+Returns JSON: each bounty has `repo`, `number`, `title`, `url`, `ageDays`, `comments`, `amountUsd`, `maxReward`, `competition` + `competitionScore` (0–100) + `signals`, `funding` (escrowed/verified-history/claimed/unknown), `trust`, `scamReasons`, `source`, `escrowed`, `deadline`, `severity`, `crossListed`, `language`.
+
+## Tool: `list_sources`
+
+Free (no payment, no `PRIVATE_KEY`). Returns every source adapter's name, mode (`live`/`manual-only`), last-ok timestamp, error, and count — dead sources show as down instead of silently empty.
 
 ## How payment works
 
