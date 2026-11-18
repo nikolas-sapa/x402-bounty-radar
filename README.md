@@ -1,6 +1,6 @@
 # x402 Bounty Radar
 
-A **paid API** that aggregates *real, funded* developer bounties from GitHub, filters out the scam-farm clones, and scores competition — sold per-request for **USDC on Base** via the [x402 protocol](https://x402.org). No KYC, no platform middleman: payments settle straight to your wallet.
+A **paid API** that aggregates *real, funded* developer bounties from GitHub, Immunefi, audit contests (Code4rena / Sherlock / Cantina), Bugcrowd and HackerOne — filters out the scam-farm clones, classifies funding, and scores competition — sold per-request for **USDC on Base** via the [x402 protocol](https://x402.org). No KYC, no platform middleman: payments settle straight to your wallet.
 
 > **x402 Bounty Radar is a pay-per-call API that returns real, funded GitHub bounties — scam-filtered and competition-scored — billed in USDC on Base via the x402 protocol, with no API key or account.**
 
@@ -19,7 +19,7 @@ It's pay-per-call, so an agent with a wallet can call it directly and pay per re
 |---|---|---|---|---|
 | Scam-clone filtering | Yes (`trust` + `scamReasons[]`) | No | N/A (curated, but limited to their repos) | No |
 | Competition scoring | Yes (`competition`) | No | Partial (shows attempts) | No |
-| Coverage | All of GitHub's bounty issues | All of GitHub, unfiltered | Only opted-in repos | Whatever you scrape |
+| Coverage | GitHub + Immunefi + audit contests + Bugcrowd + more | All of GitHub, unfiltered | Only opted-in repos | Whatever you scrape |
 | Access | Pay-per-call, no account | Free, no ranking | Account required | Build & host it yourself |
 | Payment | $0.01/call USDC on Base (x402) | Free | Platform fees on payout | N/A |
 | Agent-callable | Yes, native (wallet pays the 402) | Yes, but no signal | Not designed for it | Yes, but you own the pipeline |
@@ -57,22 +57,30 @@ This API does the filtering and ranking for you (or for an agent calling it prog
 
 `GET /bounties` → JSON list of bounties, each with:
 - `repo`, `number`, `title`, `url`, `createdAt`, `ageDays`, `comments`
-- `amountUsd` — best-effort parsed reward
-- `competition` — `low` / `medium` / `high` (from comment volume)
+- `amountUsd` — best-effort parsed reward; `maxReward` for published reward ranges (`null` = undisclosed)
+- `competition` — `low` / `medium` / `high` bucket plus `competitionScore` (0–100) with a `signals` breakdown (`comments`, `linkedPrs`, `reactions`, `crossListed`, `sourceNotes`)
+- `funding` — `escrowed` (platform holds the money) / `verified-history` (repo provably paid bounties before) / `claimed` (amount asserted) / `unknown`
 - `trust` — `likely_real` / `suspect_scam`, with `scamReasons[]`
+- `source` — `github` · `github-extras` · `immunefi` · `hackerone` · `code4rena` · `sherlock` · `cantina` · `bugcrowd`
+- `escrowed`, `deadline`, `severity`, `crossListed` (same program on multiple sources), `language`
 
-Ranked: lowest competition → highest amount → freshest.
+Ranked by competition-adjusted value: `reward × (1 − competitionScore/100)`, freshest first on ties.
 
 ### Query params
 | param | meaning |
 |---|---|
 | `language` | filter by language, e.g. `typescript` |
-| `minAmount` | min USD bounty value |
+| `minReward` | min USD bounty value (`minAmount` is a back-compat alias) |
 | `maxAgeDays` | freshness cap |
 | `includeSuspect` | `true` to include scam-suspect listings |
+| `source` | comma-separated source filter, e.g. `github,immunefi` |
+| `ecosystem` | watchlist filter — `x402` (bounty issues inside x402-ecosystem repos; see `data/watchlists.json`) |
+| `maxCompetition` | keep only `competitionScore` ≤ N |
 | `limit` | max results (≤ 50) |
 
-Free endpoints: `GET /` (self-describing), `GET /health`.
+Free endpoints: `GET /` (self-describing), `GET /health`, `GET /metrics`, `GET /sources`.
+
+`GET /sources` reports every adapter's status — name, mode (`live` vs `manual-only`), last successful fetch, error, and count. A dead adapter shows as down instead of silently returning empty. `hackerone` ships `manual-only`: its directory/search JSON endpoints are dead today (verified), so it returns a curated list of public programs rather than pretending to scrape.
 
 ## Run locally
 

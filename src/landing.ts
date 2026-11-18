@@ -14,10 +14,10 @@ export function landingHtml(opts: { origin: string; price: string; network: stri
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>x402 Bounty Radar — Real, funded GitHub bounties. Scam-filtered.</title>
-<meta name="description" content="Paid API for real, funded GitHub bounties — scam-farm clones filtered out, competition scored. ${price} per call in USDC via x402. No API key, no KYC.">
+<title>x402 Bounty Radar — Real, funded bounties. Scam-filtered.</title>
+<meta name="description" content="Paid API for real, funded developer bounties across GitHub, Immunefi, audit contests and more — scam-farm clones filtered out, competition scored. ${price} per call in USDC via x402. No API key, no KYC.">
 <meta property="og:title" content="x402 Bounty Radar">
-<meta property="og:description" content="Real, funded GitHub bounties. Scam-filtered, competition-scored. ${price} per call in USDC via x402 — no API key, no KYC.">
+<meta property="og:description" content="Real, funded bounties across GitHub, Immunefi, contests and more. Scam-filtered, competition-scored. ${price} per call in USDC via x402 — no API key, no KYC.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="${origin}/">
 <meta name="twitter:card" content="summary">
@@ -65,8 +65,8 @@ footer{margin-top:96px;padding-top:24px;border-top:1px solid var(--border);color
 </head>
 <body>
 <main>
-  <h1>Real, funded GitHub bounties. Scam-filtered, competition-scored.</h1>
-  <p class="sub"><strong>${price} per call in USDC via x402</strong> — no API key, no KYC. One HTTP request, one micropayment, ranked bounties back.</p>
+  <h1>Real, funded bounties. Scam-filtered, competition-scored.</h1>
+  <p class="sub"><strong>${price} per call in USDC via x402</strong> — no API key, no KYC. GitHub + Immunefi + audit contests + Bugcrowd + more, in one ranked feed.</p>
   ${notice}
 
   <div class="terminal">
@@ -100,9 +100,19 @@ footer{margin-top:96px;padding-top:24px;border-top:1px solid var(--border);color
       "comments": 2,
       "labels": ["bounty", "$250"],
       "amountUsd": 250,
+      "maxReward": null,
       "competition": "low",
+      "competitionScore": 14,
+      "signals": { "comments": 2, "linkedPrs": 0, "reactions": 1, "ageDays": 6, "crossListed": false, "sourceNotes": [] },
       "trust": "likely_real",
-      "scamReasons": []
+      "scamReasons": [],
+      "source": "github",
+      "escrowed": false,
+      "funding": "claimed",
+      "deadline": null,
+      "severity": null,
+      "crossListed": false,
+      "language": "typescript"
     }
   ]
 }</pre></div>
@@ -114,9 +124,12 @@ footer{margin-top:96px;padding-top:24px;border-top:1px solid var(--border);color
       <thead><tr><th scope="col">param</th><th scope="col">meaning</th></tr></thead>
       <tbody>
         <tr><td><code>language</code></td><td>filter by language, e.g. <code>typescript</code></td></tr>
-        <tr><td><code>minAmount</code></td><td>min USD bounty value</td></tr>
+        <tr><td><code>minReward</code></td><td>min USD bounty value (<code>minAmount</code> is a back-compat alias)</td></tr>
         <tr><td><code>maxAgeDays</code></td><td>freshness cap in days</td></tr>
         <tr><td><code>includeSuspect</code></td><td><code>true</code> to include scam-suspect listings</td></tr>
+        <tr><td><code>source</code></td><td>comma-separated sources, e.g. <code>github,immunefi</code></td></tr>
+        <tr><td><code>ecosystem</code></td><td>watchlist filter — <code>x402</code> (bounty issues inside x402-ecosystem repos)</td></tr>
+        <tr><td><code>maxCompetition</code></td><td>keep only <code>competitionScore</code> &le; N (0&ndash;100)</td></tr>
         <tr><td><code>limit</code></td><td>max results (&le;50)</td></tr>
       </tbody>
     </table>
@@ -133,7 +146,7 @@ footer{margin-top:96px;padding-top:24px;border-top:1px solid var(--border);color
 
   <section>
     <h2>Free endpoints</h2>
-    <p><code>GET /</code> returns a machine-readable discovery doc (this page is only served to browsers). <code>GET /health</code> for liveness. An MCP server for agent use ships in this repo under <code>packages/mcp-server</code>.</p>
+    <p><code>GET /</code> returns a machine-readable discovery doc (this page is only served to browsers). <code>GET /health</code> for liveness. <code>GET /sources</code> reports every source adapter's live status — dead sources show as down, never silently omitted. An MCP server for agent use ships in this repo under <code>packages/mcp-server</code>.</p>
   </section>
 
   <footer>

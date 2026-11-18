@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
   "name": "io.github.nikolas-sapa/bounty-radar",
-  "description": "Search real, funded GitHub developer bounties — scam-farm clones filtered, competition scored. Pay-per-call $0.01 USDC via x402 on Base. No account, no API key.",
+  "description": "Search real, funded developer bounties across GitHub, Immunefi, audit contests (Code4rena/Sherlock/Cantina), Bugcrowd and more — scam-farm clones filtered, funding classified, competition scored 0-100. Pay-per-call $0.01 USDC via x402 on Base. No account, no API key.",
   "version": "0.1.0",
   "repository": {
     "url": "https://github.com/nikolas-sapa/x402-bounty-radar",
