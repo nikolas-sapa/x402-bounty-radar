@@ -45,37 +45,47 @@ function dedup<T>(arr: T[]): T[] {
 // semantic, keeps the field honest rather than empty-but-implied.
 
 export async function getBounties(query: Query, adapters: SourceAdapter[] = ADAPTERS): Promise<Bounty[]> {
-  const limit = Math.min(query.limit ?? 25, 50);
-  const minReward = query.minReward ?? query.minAmount;
+  const limit = Math.max(0, Math.min(Number.isFinite(query.limit) ? query.limit! : 25, 50));
+  const minReward = Number.isFinite(query.minReward)
+    ? query.minReward
+    : Number.isFinite(query.minAmount)
+      ? query.minAmount
+      : undefined;
+
+  // Validate ecosystem up front: an unknown watchlist means zero bounties —
+  // not a global leak (adapters disagreeing on this is how "?ecosystem=typo"
+  // used to return the unfiltered extras feed + a phantom github outage).
+  const eco = query.ecosystem?.trim().toLowerCase() || undefined;
+  if (eco && !ecosystemNames().includes(eco)) return [];
 
   let list = adapters;
   if (query.source) {
     const wanted = new Set(query.source.split(",").map((s) => s.trim().toLowerCase()));
     list = list.filter((a) => wanted.has(a.name));
   }
-  if (query.ecosystem) list = list.filter((a) => a.name === "github" || a.name === "github-extras");
+  if (eco) list = list.filter((a) => a.name === "github" || a.name === "github-extras");
 
   const drafts = dedupeAndFlag(
-    await fetchAllSources(list, { ecosystem: query.ecosystem, language: query.language }),
+    await fetchAllSources(list, { ecosystem: eco, language: query.language }),
   );
 
   // Pre-score filters (cheap, no score needed).
   let kept = drafts;
   if (!query.includeSuspect) kept = kept.filter((d) => (d.trust ?? "likely_real") === "likely_real");
   if (minReward != null) kept = kept.filter((d) => (d.amountUsd ?? d.maxReward ?? 0) >= minReward);
-  if (query.maxAgeDays != null) {
+  if (Number.isFinite(query.maxAgeDays)) {
     // Unknown-age entries (programs without a published date) survive: a
     // freshness cap on ageDays shouldn't drop listings with no date to compare.
     kept = kept.filter((d) => {
       const age = d.createdAt ? (Date.now() - new Date(d.createdAt).getTime()) / 86400000 : null;
-      return age === null || age <= query.maxAgeDays!;
+      return age === null || !Number.isFinite(age) || age <= query.maxAgeDays!;
     });
   }
   if (query.language) {
     const want = query.language.toLowerCase();
-    // GitHub language filtering happens inside its search query; other sources
-    // filter on the language the adapter declared.
-    kept = kept.filter((d) => d.source === "github" || (d.language ?? "").toLowerCase() === want || !d.language);
+    // GitHub language filtering happens inside its search queries; other
+    // sources filter on the language the adapter declared (null = no claim).
+    kept = kept.filter((d) => !d.language || d.language.toLowerCase() === want);
   }
 
   // Enrichment pass — bounded external calls on the surviving drafts only:
@@ -92,7 +102,7 @@ export async function getBounties(query: Query, adapters: SourceAdapter[] = ADAP
 
   // Score-dependent filter.
   let filtered = out;
-  if (query.maxCompetition != null) filtered = filtered.filter((b) => b.competitionScore <= query.maxCompetition!);
+  if (Number.isFinite(query.maxCompetition)) filtered = filtered.filter((b) => b.competitionScore <= query.maxCompetition!);
 
   // Rank by competition-adjusted value: reward discounted by how contested the
   // bounty already is; unknown amounts rank by freshness at the bottom.

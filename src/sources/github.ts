@@ -54,13 +54,14 @@ function ghHeaders(): Record<string, string> {
   return h;
 }
 
-// Best-effort dollar amount from title or labels: "$5000", "[Bounty $50]", "$50-200".
+// Best-effort dollar amount from title or labels: "$5000", "[Bounty $50]",
+// "$50-200", "$5k", "$1.5k". The k-multiplier binds to the matched amount
+// only — "$200 (pool was $5k)" is $200, not $200k.
 function parseAmount(title: string, labels: string[]): number | null {
   const hay = [title, ...labels].join(" ");
-  const m = hay.match(/\$\s?(\d[\d,]*)\s*(?:k\b)?/i);
+  const m = hay.match(/\$\s?(\d[\d,]*(?:\.\d+)?)\s*(k)?\b/i);
   if (!m) return null;
-  let n = Number(m[1].replace(/,/g, ""));
-  if (/\$\s?\d[\d,]*\s*k/i.test(hay)) n *= 1000;
+  const n = Number(m[1].replace(/,/g, "")) * (m[2] ? 1000 : 1);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -93,7 +94,7 @@ interface GhIssue {
 
 async function searchIssues(q: string, perPage: number): Promise<GhIssue[]> {
   const url = `${GH}/search/issues?q=${encodeURIComponent(q)}&sort=created&order=desc&per_page=${perPage}`;
-  const res = await fetch(url, { headers: ghHeaders() });
+  const res = await fetch(url, { headers: ghHeaders(), signal: AbortSignal.timeout(15_000) });
   if (!res.ok) {
     if (res.status === 403) throw new Error("GitHub rate limit hit — set GITHUB_TOKEN");
     throw new Error(`GitHub search failed: ${res.status}`);
@@ -148,16 +149,22 @@ export const github: SourceAdapter = {
       // Ecosystem view: bounty issues inside watchlist repos only.
       // Multiple repo: terms are OR'd (~5 safe per query) — chunk, and reuse
       // the same per-label pattern as the main path plus a title catch-all.
+      // A renamed/deleted watchlist repo 422s its query; one bad chunk must
+      // not zero the whole adapter.
       const qParts = [...labels.map((l) => `label:"${l}"`), "bounty in:title"];
       for (let i = 0; i < wl.repos.length; i += 5) {
         const repos = wl.repos.slice(i, i + 5).map((r) => `repo:${r}`).join(" ");
         for (const part of qParts) {
-          const items = await searchIssues(`${part} state:open ${repos}${langFilter}`, perPage);
-          for (const it of items) {
-            if (!seen.has(it.html_url)) {
-              seen.add(it.html_url);
-              raw.push(it);
+          try {
+            const items = await searchIssues(`${part} state:open type:issue ${repos}${langFilter}`, perPage);
+            for (const it of items) {
+              if (!seen.has(it.html_url)) {
+                seen.add(it.html_url);
+                raw.push(it);
+              }
             }
+          } catch (e) {
+            console.error(`[github] watchlist query failed (${part}, ${repos}): ${e instanceof Error ? e.message : String(e)}`);
           }
         }
       }
@@ -165,8 +172,10 @@ export const github: SourceAdapter = {
       for (const lbl of labels) {
         let items: GhIssue[] = [];
         try {
-          items = await searchIssues(`label:"${lbl}" state:open${langFilter}`, perPage);
+          items = await searchIssues(`label:"${lbl}" state:open type:issue${langFilter}`, perPage);
         } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(`[github] label query failed (${lbl}): ${msg}`);
           // One dead label query shouldn't zero the whole source.
           if (raw.length === 0 && lbl === labels[labels.length - 1]) throw e;
         }
@@ -195,12 +204,15 @@ interface TimelineEvent {
 // it's 1 request/issue and unauthenticated rate is ~60/hr.
 export async function enrichLinkedPrs(drafts: BountyDraft[], maxIssues = 15): Promise<void> {
   if (!process.env.GITHUB_TOKEN) return;
-  const issues = drafts.filter((d) => d.source === "github" && d.number !== null).slice(0, maxIssues);
+  const issues = drafts
+    .filter((d) => (d.source === "github" || d.source === "github-extras") && d.number !== null)
+    .slice(0, maxIssues);
   await Promise.all(
     issues.map(async (d) => {
       try {
         const res = await fetch(`${GH}/repos/${d.repo}/issues/${d.number}/timeline?per_page=100`, {
           headers: { ...ghHeaders(), Accept: "application/vnd.github.mockingbird-preview+json" },
+          signal: AbortSignal.timeout(15_000),
         });
         if (!res.ok) return;
         const events = (await res.json()) as TimelineEvent[];
@@ -224,8 +236,8 @@ export async function repoBountyHistory(repo: string): Promise<boolean> {
   try {
     // total_count is the real signal — closed issues titled "bounty" = paid before.
     const res = await fetch(
-      `${GH}/search/issues?q=${encodeURIComponent(`repo:${repo} state:closed bounty in:title`)}&per_page=1`,
-      { headers: ghHeaders() },
+      `${GH}/search/issues?q=${encodeURIComponent(`repo:${repo} state:closed type:issue bounty in:title`)}&per_page=1`,
+      { headers: ghHeaders(), signal: AbortSignal.timeout(15_000) },
     );
     if (!res.ok) throw new Error(String(res.status));
     const data = (await res.json()) as { total_count?: number };
